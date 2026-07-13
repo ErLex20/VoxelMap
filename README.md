@@ -31,22 +31,21 @@ PCL>= 1.8,   Follow [PCL Installation](http://www.pointclouds.org/downloads/linu
 
 Eigen>= 3.3.4, Follow [Eigen Installation](http://eigen.tuxfamily.org/index.php?title=Main_Page).
 
-### 1.2. **livox_ros_driver**
-Follow [livox_ros_driver Installation](https://github.com/Livox-SDK/livox_ros_driver).
+### 1.2. **ROS 2 && livox_ros_driver2**
+Install ROS 2 and follow the [livox_ros_driver2 installation](https://github.com/Livox-SDK/livox_ros_driver2).
 
 ## 2. Build
-Clone the repository and catkin_make:
+Clone the repository into a ROS 2 workspace and build it with colcon:
 ```
     cd ~/$A_ROS_DIR$/src
     git clone https://github.com/hku-mars/VoxelMap.git
     cd ..
-    catkin_make
-    source devel/setup.bash
+    colcon build --packages-select voxel_map --symlink-install
+    source install/setup.bash
 ```
-- Remember to source the livox_ros_driver before build (follow 1.2 **livox_ros_driver**)
+- Remember to source the livox_ros_driver2 workspace before building (follow 1.2 **ROS 2 && livox_ros_driver2**).
 
 ## 3. Run on Dataset
-Current version of VoxelMap does not support IMU and requires **undistorted** point cloud.
 ### 3.1 Run on KITTI Odometry dataset
 Step A: Setup before run
 Edit ``` config/velodyne.yaml ``` to set the below parameters:
@@ -57,11 +56,11 @@ Edit ``` config/velodyne.yaml ``` to set the below parameters:
 Step B: Run below
 ```
     cd ~/$VOXEL_MAP_ROS_DIR$
-    source devel/setup.bash
-    roslaunch voxel_map mapping_velodyne.launch
+    source install/setup.bash
+    ros2 launch voxel_map mapping_velodyne.launch.py
 ```
 
-Step C: Play rosbag.
+Step C: Play a ROS 2 bag with `ros2 bag play`.
 
 If want to save the trajectory result (camera pose), set the ```write_kitti_log``` to ```true``` and change the ```result_path``` to your own path.
 

@@ -8,12 +8,12 @@
 #include <execution>
 #include <openssl/md5.h>
 #include <pcl/common/io.h>
-#include <rosbag/bag.h>
+#include <rclcpp/rclcpp.hpp>
 #include <stdio.h>
 #include <string>
 #include <unordered_map>
-#include <visualization_msgs/Marker.h>
-#include <visualization_msgs/MarkerArray.h>
+#include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #define HASH_P 116101
 #define MAX_N 10000000000
@@ -947,7 +947,7 @@ void BuildResidualListNormal(
 
 void CalcVectQuation(const Eigen::Vector3d &x_vec, const Eigen::Vector3d &y_vec,
                      const Eigen::Vector3d &z_vec,
-                     geometry_msgs::Quaternion &q) {
+                     geometry_msgs::msg::Quaternion &q) {
 
   Eigen::Matrix3d rot;
   rot << x_vec(0), x_vec(1), x_vec(2), y_vec(0), y_vec(1), y_vec(2), z_vec(0),
@@ -961,7 +961,7 @@ void CalcVectQuation(const Eigen::Vector3d &x_vec, const Eigen::Vector3d &y_vec,
 }
 
 void CalcQuation(const Eigen::Vector3d &vec, const int axis,
-                 geometry_msgs::Quaternion &q) {
+                 geometry_msgs::msg::Quaternion &q) {
   Eigen::Vector3d x_body = vec;
   Eigen::Vector3d y_body(1, 1, 0);
   if (x_body(2) != 0) {
@@ -992,20 +992,20 @@ void CalcQuation(const Eigen::Vector3d &vec, const int axis,
   q.z = eq.z();
 }
 
-void pubSinglePlane(visualization_msgs::MarkerArray &plane_pub,
+void pubSinglePlane(visualization_msgs::msg::MarkerArray &plane_pub,
                     const std::string plane_ns, const Plane &single_plane,
                     const float alpha, const Eigen::Vector3d rgb) {
-  visualization_msgs::Marker plane;
+  visualization_msgs::msg::Marker plane;
   plane.header.frame_id = "camera_init";
-  plane.header.stamp = ros::Time();
+  plane.header.stamp = builtin_interfaces::msg::Time();
   plane.ns = plane_ns;
   plane.id = single_plane.id;
-  plane.type = visualization_msgs::Marker::CYLINDER;
-  plane.action = visualization_msgs::Marker::ADD;
+  plane.type = visualization_msgs::msg::Marker::CYLINDER;
+  plane.action = visualization_msgs::msg::Marker::ADD;
   plane.pose.position.x = single_plane.center[0];
   plane.pose.position.y = single_plane.center[1];
   plane.pose.position.z = single_plane.center[2];
-  geometry_msgs::Quaternion q;
+  geometry_msgs::msg::Quaternion q;
   CalcVectQuation(single_plane.x_normal, single_plane.y_normal,
                   single_plane.normal, q);
   plane.pose.orientation = q;
@@ -1016,16 +1016,15 @@ void pubSinglePlane(visualization_msgs::MarkerArray &plane_pub,
   plane.color.r = rgb(0);
   plane.color.g = rgb(1);
   plane.color.b = rgb(2);
-  plane.lifetime = ros::Duration();
+  plane.lifetime = builtin_interfaces::msg::Duration();
   plane_pub.markers.push_back(plane);
 }
 
 void pubNoPlaneMap(const std::unordered_map<VOXEL_LOC, OctoTree *> &feat_map,
-                   const ros::Publisher &plane_map_pub) {
+                   const rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr &plane_map_pub) {
   int id = 0;
-  ros::Rate loop(500);
   float use_alpha = 0.8;
-  visualization_msgs::MarkerArray voxel_plane;
+  visualization_msgs::msg::MarkerArray voxel_plane;
   voxel_plane.markers.reserve(1000000);
   for (auto iter = feat_map.begin(); iter != feat_map.end(); iter++) {
     if (!iter->second->plane_ptr_->is_plane) {
@@ -1048,18 +1047,16 @@ void pubNoPlaneMap(const std::unordered_map<VOXEL_LOC, OctoTree *> &feat_map,
       }
     }
   }
-  plane_map_pub.publish(voxel_plane);
-  loop.sleep();
+  plane_map_pub->publish(voxel_plane);
 }
 
 void pubVoxelMap(const std::unordered_map<VOXEL_LOC, OctoTree *> &voxel_map,
                  const int pub_max_voxel_layer,
-                 const ros::Publisher &plane_map_pub) {
+                 const rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr &plane_map_pub) {
   double max_trace = 0.25;
   double pow_num = 0.2;
-  ros::Rate loop(500);
   float use_alpha = 0.8;
-  visualization_msgs::MarkerArray voxel_plane;
+  visualization_msgs::msg::MarkerArray voxel_plane;
   voxel_plane.markers.reserve(1000000);
   std::vector<Plane> pub_plane_list;
   for (auto iter = voxel_map.begin(); iter != voxel_map.end(); iter++) {
@@ -1084,19 +1081,17 @@ void pubVoxelMap(const std::unordered_map<VOXEL_LOC, OctoTree *> &voxel_map,
     }
     pubSinglePlane(voxel_plane, "plane", pub_plane_list[i], alpha, plane_rgb);
   }
-  plane_map_pub.publish(voxel_plane);
-  loop.sleep();
+  plane_map_pub->publish(voxel_plane);
 }
 
 void pubPlaneMap(const std::unordered_map<VOXEL_LOC, OctoTree *> &feat_map,
-                 const ros::Publisher &plane_map_pub) {
+                 const rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr &plane_map_pub) {
   OctoTree *current_octo = nullptr;
 
   double max_trace = 0.25;
   double pow_num = 0.2;
-  ros::Rate loop(500);
   float use_alpha = 1.0;
-  visualization_msgs::MarkerArray voxel_plane;
+  visualization_msgs::msg::MarkerArray voxel_plane;
   voxel_plane.markers.reserve(1000000);
 
   for (auto iter = feat_map.begin(); iter != feat_map.end(); iter++) {
@@ -1209,9 +1204,7 @@ void pubPlaneMap(const std::unordered_map<VOXEL_LOC, OctoTree *> &feat_map,
     }
   }
 
-  plane_map_pub.publish(voxel_plane);
-  // plane_map_pub.publish(voxel_norm);
-  loop.sleep();
+  plane_map_pub->publish(voxel_plane);
   // cout << "[Map Info] Plane counts:" << plane_count
   //      << " Sub Plane counts:" << sub_plane_count
   //      << " Sub Sub Plane counts:" << sub_sub_plane_count << endl;

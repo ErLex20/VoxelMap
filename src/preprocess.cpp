@@ -18,13 +18,13 @@ void Preprocess::set(bool feat_en, int lid_type, double bld, int pfilt_num) {
   point_filter_num = pfilt_num;
 }
 
-void Preprocess::process(const livox_ros_driver::CustomMsg::ConstPtr &msg,
+void Preprocess::process(const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr &msg,
                          PointCloudXYZI::Ptr &pcl_out) {
   avia_handler(msg);
   *pcl_out = pl_surf;
 }
 
-void Preprocess::process(const sensor_msgs::PointCloud2::ConstPtr &msg,
+void Preprocess::process(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg,
                          PointCloudXYZI::Ptr &pcl_out) {
   switch (lidar_type) {
   case L515:
@@ -35,6 +35,10 @@ void Preprocess::process(const sensor_msgs::PointCloud2::ConstPtr &msg,
     velodyne_handler(msg);
     break;
 
+  case MID360:
+    mid360_handler(msg);
+    break;
+
   default:
     printf("Error LiDAR Type");
     break;
@@ -43,7 +47,7 @@ void Preprocess::process(const sensor_msgs::PointCloud2::ConstPtr &msg,
 }
 
 void Preprocess::avia_handler(
-    const livox_ros_driver::CustomMsg::ConstPtr &msg) {
+    const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr &msg) {
   pl_surf.clear();
   pl_corn.clear();
   pl_full.clear();
@@ -93,7 +97,7 @@ void Preprocess::avia_handler(
   }
 }
 
-void Preprocess::oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg) {
+void Preprocess::oust64_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg) {
   pl_surf.clear();
   pl_corn.clear();
   pl_full.clear();
@@ -103,7 +107,6 @@ void Preprocess::oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg) {
   pl_corn.reserve(plsize);
   pl_surf.reserve(plsize);
 
-  double time_stamp = msg->header.stamp.toSec();
   // cout << "===================================" << endl;
   // printf("Pt size = %d, N_SCANS = %d\r\n", plsize, N_SCANS);
   for (int i = 0; i < pl_orig.points.size(); i++) {
@@ -138,7 +141,7 @@ void Preprocess::oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg) {
   }
 }
 
-void Preprocess::l515_handler(const sensor_msgs::PointCloud2::ConstPtr &msg) {
+void Preprocess::l515_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg) {
   pl_surf.clear();
   pcl::PointCloud<velodyne_ros::Point> pl_orig;
   pcl::fromROSMsg(*msg, pl_orig);
@@ -159,7 +162,7 @@ void Preprocess::l515_handler(const sensor_msgs::PointCloud2::ConstPtr &msg) {
 #define MAX_LINE_NUM 64
 
 void Preprocess::velodyne_handler(
-    const sensor_msgs::PointCloud2::ConstPtr &msg) {
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg) {
   pl_surf.clear();
   pl_corn.clear();
   pl_full.clear();
@@ -188,5 +191,46 @@ void Preprocess::velodyne_handler(
       continue;
     }
     pl_surf.push_back(added_pt);
+  }
+}
+
+void Preprocess::mid360_handler(
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg) {
+  pl_surf.clear();
+  pl_corn.clear();
+  pl_full.clear();
+
+  pcl::PointCloud<livox_pcl2::Point> pl_orig;
+  pcl::fromROSMsg(*msg, pl_orig);
+  if (pl_orig.empty()) {
+    return;
+  }
+
+  pl_surf.reserve(pl_orig.size());
+  const double first_timestamp = pl_orig.front().timestamp;
+  for (std::size_t i = 0; i < pl_orig.size(); ++i) {
+    if (i % point_filter_num != 0) {
+      continue;
+    }
+
+    const auto &source = pl_orig[i];
+    const double range_squared = source.x * source.x + source.y * source.y +
+                                 source.z * source.z;
+    if (range_squared <= blind * blind) {
+      continue;
+    }
+
+    PointType point;
+    point.x = source.x;
+    point.y = source.y;
+    point.z = source.z;
+    point.intensity = source.intensity;
+    point.normal_x = 0.0f;
+    point.normal_y = 0.0f;
+    point.normal_z = 0.0f;
+    // IILABS3D stores absolute per-point timestamps as float64 nanoseconds.
+    // VoxelMap uses curvature as the offset from scan start in milliseconds.
+    point.curvature = static_cast<float>((source.timestamp - first_timestamp) * 1e-6);
+    pl_surf.push_back(point);
   }
 }

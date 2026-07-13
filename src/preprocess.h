@@ -1,7 +1,6 @@
-#include <livox_ros_driver/CustomMsg.h>
+#include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <pcl_conversions/pcl_conversions.h>
-#include <ros/ros.h>
-#include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 
 using namespace std;
 
@@ -10,7 +9,7 @@ using namespace std;
 typedef pcl::PointXYZINormal PointType;
 typedef pcl::PointCloud<PointType> PointCloudXYZI;
 
-enum LID_TYPE { AVIA = 1, VELO16, L515, OUSTER64 }; //{1, 2, 3}
+enum LID_TYPE { AVIA = 1, VELO16, L515, OUSTER64, MID360 }; //{1, 2, 3, 4, 5}
 
 namespace velodyne_ros {
 struct EIGEN_ALIGN16 Point {
@@ -40,6 +39,17 @@ struct EIGEN_ALIGN16 Point {
 };
 } // namespace ouster_ros
 
+namespace livox_pcl2 {
+struct EIGEN_ALIGN16 Point {
+  PCL_ADD_POINT4D;
+  float intensity;
+  uint8_t tag;
+  uint8_t line;
+  double timestamp;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+};
+} // namespace livox_pcl2
+
 // clang-format off
 POINT_CLOUD_REGISTER_POINT_STRUCT(ouster_ros::Point,
     (float, x, x)
@@ -53,6 +63,15 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(ouster_ros::Point,
     (std::uint16_t, ambient, ambient)
     (std::uint32_t, range, range)
 )
+POINT_CLOUD_REGISTER_POINT_STRUCT(livox_pcl2::Point,
+    (float, x, x)
+    (float, y, y)
+    (float, z, z)
+    (float, intensity, intensity)
+    (std::uint8_t, tag, tag)
+    (std::uint8_t, line, line)
+    (double, timestamp, timestamp)
+)
 
 class Preprocess
 {
@@ -62,23 +81,23 @@ class Preprocess
   Preprocess();
   ~Preprocess();
   
-  void process(const livox_ros_driver::CustomMsg::ConstPtr &msg, PointCloudXYZI::Ptr &pcl_out);
-  void process(const sensor_msgs::PointCloud2::ConstPtr &msg, PointCloudXYZI::Ptr &pcl_out);
+  void process(const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr &msg, PointCloudXYZI::Ptr &pcl_out);
+  void process(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg, PointCloudXYZI::Ptr &pcl_out);
   void set(bool feat_en, int lid_type, double bld, int pfilt_num);
 
-  // sensor_msgs::PointCloud2::ConstPtr pointcloud;
+  // sensor_msgs::msg::PointCloud2::ConstSharedPtr pointcloud;
   PointCloudXYZI pl_full, pl_corn, pl_surf;
   PointCloudXYZI pl_buff[128]; //maximum 128 line lidar
-  int lidar_type, point_filter_num, N_SCANS;;
+  int lidar_type, point_filter_num, N_SCANS;
   double blind;
   bool feature_enabled, given_offset_time;
-  ros::Publisher pub_full, pub_surf, pub_corn;
     
 
   private:
-  void avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg);
-  void oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
-  void l515_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
-  void velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
+  void avia_handler(const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr &msg);
+  void oust64_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
+  void l515_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
+  void velodyne_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
+  void mid360_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
   
 };

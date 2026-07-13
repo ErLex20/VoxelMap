@@ -4,25 +4,22 @@
 #include <condition_variable>
 #include <csignal>
 #include <deque>
-#include <eigen_conversions/eigen_msg.h>
 #include <fstream>
-#include <geometry_msgs/Vector3.h>
+#include <geometry_msgs/msg/vector3.hpp>
 #include <math.h>
 #include <mutex>
-#include <nav_msgs/Odometry.h>
+#include <nav_msgs/msg/odometry.hpp>
 #include <pcl/common/io.h>
 #include <pcl/common/transforms.h>
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
-#include <ros/ros.h>
-#include <sensor_msgs/Imu.h>
-#include <sensor_msgs/PointCloud2.h>
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <so3_math.h>
-#include <tf/transform_broadcaster.h>
 #include <thread>
-#include <voxel_map/States.h>
 
 /// *************Preconfiguration
 
@@ -41,7 +38,7 @@ public:
   ~ImuProcess();
 
   void Reset();
-  void Reset(double start_timestamp, const sensor_msgs::ImuConstPtr &lastimu);
+  void Reset(double start_timestamp, const sensor_msgs::msg::Imu::ConstSharedPtr &lastimu);
   void set_extrinsic(const V3D &transl, const M3D &rot);
   void set_extrinsic(const V3D &transl);
   void set_extrinsic(const MD(4, 4) & T);
@@ -52,7 +49,6 @@ public:
   void Process(const MeasureGroup &meas, StatesGroup &state,
                PointCloudXYZI::Ptr &pcl_un_);
 
-  ros::NodeHandle nh;
   ofstream fout_imu;
   V3D cov_acc;
   V3D cov_gyr;
@@ -73,8 +69,8 @@ private:
                    PointCloudXYZI::Ptr &pcl_out);
 
   PointCloudXYZI::Ptr cur_pcl_un_;
-  sensor_msgs::ImuConstPtr last_imu_;
-  deque<sensor_msgs::ImuConstPtr> v_imu_;
+  sensor_msgs::msg::Imu::ConstSharedPtr last_imu_;
+  deque<sensor_msgs::msg::Imu::ConstSharedPtr> v_imu_;
   vector<Pose6D> IMUpose;
   vector<M3D> v_rot_pcl_;
 
@@ -106,13 +102,13 @@ ImuProcess::ImuProcess()
   angvel_last = Zero3d;
   Lid_offset_to_IMU = Zero3d;
   Lid_rot_to_IMU = Eye3d;
-  last_imu_.reset(new sensor_msgs::Imu());
+  last_imu_.reset(new sensor_msgs::msg::Imu());
 }
 
 ImuProcess::~ImuProcess() {}
 
 void ImuProcess::Reset() {
-  ROS_WARN("Reset ImuProcess");
+  RCLCPP_WARN(rclcpp::get_logger("voxel_map"), "Reset ImuProcess");
   mean_acc = V3D(0, 0, -1.0);
   mean_gyr = V3D(0, 0, 0);
   angvel_last = Zero3d;
@@ -121,7 +117,7 @@ void ImuProcess::Reset() {
   init_iter_num = 1;
   v_imu_.clear();
   IMUpose.clear();
-  last_imu_.reset(new sensor_msgs::Imu());
+  last_imu_.reset(new sensor_msgs::msg::Imu());
   cur_pcl_un_.reset(new PointCloudXYZI());
 }
 
@@ -156,7 +152,7 @@ void ImuProcess::IMU_init(const MeasureGroup &meas, StatesGroup &state_inout,
                           int &N) {
   /** 1. initializing the gravity, gyro bias, acc and gyro covariance
    ** 2. normalize the acceleration measurenments to unit gravity **/
-  ROS_INFO("IMU Initializing: %.1f %%", double(N) / MAX_INI_COUNT * 100);
+  RCLCPP_INFO(rclcpp::get_logger("voxel_map"), "IMU Initializing: %.1f %%", double(N) / MAX_INI_COUNT * 100);
   V3D cur_acc, cur_gyr;
 
   if (b_first_frame_) {
@@ -207,8 +203,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas,
   /*** add the imu of the last frame-tail to the of current frame-head ***/
   auto v_imu = meas.imu;
   v_imu.push_front(last_imu_);
-  const double &imu_beg_time = v_imu.front()->header.stamp.toSec();
-  const double &imu_end_time = v_imu.back()->header.stamp.toSec();
+  const double imu_beg_time = get_time_sec(v_imu.front()->header.stamp);
+  const double imu_end_time = get_time_sec(v_imu.back()->header.stamp);
   const double &pcl_beg_time = meas.lidar_beg_time;
 
   /*** sort point clouds by offset time ***/
@@ -238,7 +234,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas,
     auto &&head = *(it_imu);
     auto &&tail = *(it_imu + 1);
 
-    if (tail->header.stamp.toSec() < pcl_beg_time)
+    if (get_time_sec(tail->header.stamp) < pcl_beg_time)
       continue;
 
     angvel_avr << 0.5 * (head->angular_velocity.x + tail->angular_velocity.x),
@@ -250,17 +246,17 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas,
         0.5 * (head->linear_acceleration.z + tail->linear_acceleration.z);
 
     // #ifdef DEBUG_PRINT
-    fout_imu << setw(10) << head->header.stamp.toSec() - first_lidar_time << " "
+    fout_imu << setw(10) << get_time_sec(head->header.stamp) - first_lidar_time << " "
              << angvel_avr.transpose() << " " << acc_avr.transpose() << endl;
     // #endif
 
     angvel_avr -= state_inout.bias_g;
     acc_avr = acc_avr * G_m_s2 / mean_acc.norm() - state_inout.bias_a;
 
-    if (head->header.stamp.toSec() < pcl_beg_time) {
-      dt = tail->header.stamp.toSec() - pcl_beg_time;
+    if (get_time_sec(head->header.stamp) < pcl_beg_time) {
+      dt = get_time_sec(tail->header.stamp) - pcl_beg_time;
     } else {
-      dt = tail->header.stamp.toSec() - head->header.stamp.toSec();
+      dt = get_time_sec(tail->header.stamp) - get_time_sec(head->header.stamp);
     }
 
     /* covariance propagation */
@@ -304,7 +300,7 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas,
     /* save the poses at each IMU measurements */
     angvel_last = angvel_avr;
     acc_s_last = acc_imu;
-    double &&offs_t = tail->header.stamp.toSec() - pcl_beg_time;
+    double &&offs_t = get_time_sec(tail->header.stamp) - pcl_beg_time;
     IMUpose.push_back(
         set_pose6d(offs_t, acc_imu, angvel_avr, vel_imu, pos_imu, R_imu));
   }
@@ -407,7 +403,7 @@ void ImuProcess::Process(const MeasureGroup &meas, StatesGroup &stat,
   if (meas.imu.empty() && imu_en) {
     return;
   }
-  ROS_ASSERT(meas.lidar != nullptr);
+  assert(meas.lidar != nullptr);
 
   if (imu_need_init_ && imu_en) {
     /// The very first lidar frame
@@ -420,7 +416,7 @@ void ImuProcess::Process(const MeasureGroup &meas, StatesGroup &stat,
     if (init_iter_num > MAX_INI_COUNT) {
       cov_acc *= pow(G_m_s2 / mean_acc.norm(), 2);
       imu_need_init_ = false;
-      ROS_INFO("IMU Initials: Gravity: %.4f %.4f %.4f %.4f; state.bias_g: %.4f "
+      RCLCPP_INFO(rclcpp::get_logger("voxel_map"), "IMU Initials: Gravity: %.4f %.4f %.4f %.4f; state.bias_g: %.4f "
                "%.4f %.4f; acc covarience: %.8f %.8f %.8f; gry covarience: "
                "%.8f %.8f %.8f",
                stat.gravity[0], stat.gravity[1], stat.gravity[2],
@@ -431,7 +427,7 @@ void ImuProcess::Process(const MeasureGroup &meas, StatesGroup &stat,
       cov_gyr = Eye3d * cov_gyr_scale;
       // cout<<"mean acc: "<<mean_acc<<" acc measures in word
       // frame:"<<state.rot_end.transpose()*mean_acc<<endl;
-      ROS_INFO("IMU Initials: Gravity: %.4f %.4f %.4f %.4f; state.bias_g: %.4f "
+      RCLCPP_INFO(rclcpp::get_logger("voxel_map"), "IMU Initials: Gravity: %.4f %.4f %.4f %.4f; state.bias_g: %.4f "
                "%.4f %.4f; acc covarience: %.8f %.8f %.8f; gry covarience: "
                "%.8f %.8f %.8f",
                stat.gravity[0], stat.gravity[1], stat.gravity[2],

@@ -2,15 +2,15 @@
 #define COMMON_LIB_H
 
 #include <Eigen/Eigen>
-#include <eigen_conversions/eigen_msg.h>
-#include <nav_msgs/Odometry.h>
+#include <deque>
+#include <builtin_interfaces/msg/time.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
-#include <sensor_msgs/Imu.h>
+#include <sensor_msgs/msg/imu.hpp>
 #include <so3_math.h>
-#include <tf/transform_broadcaster.h>
-#include <voxel_map/Pose6D.h>
-#include <voxel_map/States.h>
+#include <voxel_map/msg/pose6_d.hpp>
+#include <voxel_map/msg/states.hpp>
 
 using namespace std;
 using namespace Eigen;
@@ -35,7 +35,7 @@ using namespace Eigen;
                                 mat.data() + mat.rows() * mat.cols())
 #define DEBUG_FILE_DIR(name) (string(string(ROOT_DIR) + "Log/" + name))
 
-typedef voxel_map::Pose6D Pose6D;
+typedef voxel_map::msg::Pose6D Pose6D;
 typedef pcl::PointXYZINormal PointType;
 typedef pcl::PointCloud<PointType> PointCloudXYZI;
 typedef vector<PointType, Eigen::aligned_allocator<PointType>> PointVector;
@@ -60,8 +60,12 @@ struct MeasureGroup // Lidar data and imu dates for the curent process
   MeasureGroup() { this->lidar.reset(new PointCloudXYZI()); };
   double lidar_beg_time;
   PointCloudXYZI::Ptr lidar;
-  deque<sensor_msgs::Imu::ConstPtr> imu;
+  std::deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu;
 };
+
+inline double get_time_sec(const builtin_interfaces::msg::Time &time) {
+  return static_cast<double>(time.sec) + static_cast<double>(time.nanosec) * 1e-9;
+}
 
 struct StatesGroup {
   StatesGroup() {
