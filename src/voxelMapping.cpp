@@ -4,7 +4,9 @@
 #include <Eigen/Core>
 #include <common_lib.h>
 #include <csignal>
+#include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
@@ -101,7 +103,58 @@ bool dense_map_en = true;
 
 deque<PointCloudXYZI::Ptr> lidar_buffer;
 deque<double> time_buffer;
+deque<double> preprocess_time_buffer;
 deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu_buffer;
+
+rclcpp::Node::SharedPtr node;
+
+bool timing_enabled = false;
+string timing_csv_path;
+ofstream timing_csv;
+mutex timing_csv_mutex;
+double current_lidar_preprocess_ms = 0.0;
+
+void init_timing_csv() {
+  if (!timing_enabled)
+    return;
+  if (timing_csv_path.empty()) {
+    RCLCPP_ERROR(node->get_logger(),
+                 "timing.enable is true but timing.csv_path is empty");
+    timing_enabled = false;
+    return;
+  }
+
+  const std::filesystem::path path(timing_csv_path);
+  if (path.has_parent_path()) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) {
+      RCLCPP_ERROR(node->get_logger(), "failed to create timing directory: %s",
+                   error.message().c_str());
+      timing_enabled = false;
+      return;
+    }
+  }
+
+  timing_csv.open(timing_csv_path, std::ios::out);
+  if (!timing_csv.is_open()) {
+    RCLCPP_ERROR(node->get_logger(), "failed to open timing CSV: %s",
+                 timing_csv_path.c_str());
+    timing_enabled = false;
+    return;
+  }
+  timing_csv << "timestamp,thread,process_time_ms\n";
+  RCLCPP_INFO(node->get_logger(), "timing CSV initialized: %s",
+              timing_csv_path.c_str());
+}
+
+void log_timing(double timestamp, const char *stage, double time_ms) {
+  if (!timing_enabled || !timing_csv.is_open())
+    return;
+  lock_guard<mutex> lock(timing_csv_mutex);
+  timing_csv << fixed << setprecision(6) << timestamp << ',' << stage << ','
+             << setprecision(3) << time_ms << '\n';
+}
 
 // surf feature in map
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
@@ -129,7 +182,6 @@ geometry_msgs::msg::Quaternion geoQuat;
 geometry_msgs::msg::PoseStamped msg_body_pose;
 
 shared_ptr<Preprocess> p_pre(new Preprocess());
-rclcpp::Node::SharedPtr node;
 std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
 
 void SigHandle(int sig) {
@@ -238,11 +290,19 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
   if (timestamp < last_timestamp_lidar) {
     RCLCPP_ERROR(node->get_logger(), "lidar loop back, clear buffer");
     lidar_buffer.clear();
+    time_buffer.clear();
+    preprocess_time_buffer.clear();
   }
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
+  const auto preprocess_start = std::chrono::steady_clock::now();
   p_pre->process(msg, ptr);
+  const auto preprocess_end = std::chrono::steady_clock::now();
   lidar_buffer.push_back(ptr);
   time_buffer.push_back(timestamp);
+  preprocess_time_buffer.push_back(
+      std::chrono::duration<double, std::milli>(preprocess_end -
+                                                preprocess_start)
+          .count());
   last_timestamp_lidar = timestamp;
 
   mtx_buffer.unlock();
@@ -256,11 +316,19 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::ConstSharedPtr msg) 
   if (timestamp < last_timestamp_lidar) {
     RCLCPP_ERROR(node->get_logger(), "lidar loop back, clear buffer");
     lidar_buffer.clear();
+    time_buffer.clear();
+    preprocess_time_buffer.clear();
   }
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
+  const auto preprocess_start = std::chrono::steady_clock::now();
   p_pre->process(msg, ptr);
+  const auto preprocess_end = std::chrono::steady_clock::now();
   lidar_buffer.push_back(ptr);
   time_buffer.push_back(timestamp);
+  preprocess_time_buffer.push_back(
+      std::chrono::duration<double, std::milli>(preprocess_end -
+                                                preprocess_start)
+          .count());
   last_timestamp_lidar = timestamp;
 
   mtx_buffer.unlock();
@@ -296,8 +364,12 @@ bool sync_packages(MeasureGroup &meas) {
       // cout<<"meas.lidar->points.size(): "<<meas.lidar->points.size()<<endl;
       meas.lidar = lidar_buffer.front();
       meas.lidar_beg_time = time_buffer.front();
+      current_lidar_preprocess_ms =
+          preprocess_time_buffer.empty() ? 0.0 : preprocess_time_buffer.front();
       time_buffer.pop_front();
       lidar_buffer.pop_front();
+      if (!preprocess_time_buffer.empty())
+        preprocess_time_buffer.pop_front();
       return true;
     }
 
@@ -311,8 +383,13 @@ bool sync_packages(MeasureGroup &meas) {
   /*** push a lidar scan ***/
   if (!lidar_pushed) {
     meas.lidar = lidar_buffer.front();
+    current_lidar_preprocess_ms =
+        preprocess_time_buffer.empty() ? 0.0 : preprocess_time_buffer.front();
     if (meas.lidar->points.size() <= 1) {
       lidar_buffer.pop_front();
+      time_buffer.pop_front();
+      if (!preprocess_time_buffer.empty())
+        preprocess_time_buffer.pop_front();
       return false;
     }
     meas.lidar_beg_time = time_buffer.front();
@@ -338,6 +415,8 @@ bool sync_packages(MeasureGroup &meas) {
 
   lidar_buffer.pop_front();
   time_buffer.pop_front();
+  if (!preprocess_time_buffer.empty())
+    preprocess_time_buffer.pop_front();
   lidar_pushed = false;
   return true;
 }
@@ -555,6 +634,9 @@ int main(int argc, char **argv) {
   // result params
   write_kitti_log = node->declare_parameter<bool>("Result.write_kitti_log", false);
   result_path = node->declare_parameter<string>("Result.result_path", "");
+  timing_enabled = node->declare_parameter<bool>("timing.enable", false);
+  timing_csv_path = node->declare_parameter<string>("timing.csv_path", "");
+  init_timing_csv();
   cout << "p_pre->lidar_type " << p_pre->lidar_type << endl;
   for (int i = 0; i < layer_point_size.size(); i++) {
     layer_size.push_back(layer_point_size[i]);
@@ -657,6 +739,7 @@ int main(int argc, char **argv) {
         flg_reset = false;
         continue;
       }
+      const auto preprocess_stage_start = std::chrono::steady_clock::now();
       std::cout << "scanIdx:" << scanIdx << std::endl;
       double t0, t1, t2, t3, t4, t5, match_start, match_time, solve_start,
           svd_time;
@@ -805,6 +888,9 @@ int main(int argc, char **argv) {
               calc_point_cov_end - calc_point_cov_start)
               .count() *
           1000;
+
+      const auto preprocess_stage_end = std::chrono::steady_clock::now();
+      const auto mapping_stage_start = preprocess_stage_end;
 
       for (iterCount = 0; iterCount < NUM_MAX_ITERATIONS; iterCount++) {
         laserCloudOri->clear();
@@ -1057,6 +1143,20 @@ int main(int argc, char **argv) {
               .count() *
           1000;
 
+      const auto mapping_stage_end = std::chrono::steady_clock::now();
+
+      const double preprocess_stage_time =
+          current_lidar_preprocess_ms +
+          std::chrono::duration<double, std::milli>(preprocess_stage_end -
+                                                     preprocess_stage_start)
+              .count();
+      const double mapping_stage_time =
+          std::chrono::duration<double, std::milli>(mapping_stage_end -
+                                                     mapping_stage_start)
+              .count();
+      log_timing(Measures.lidar_beg_time, "preprocess", preprocess_stage_time);
+      log_timing(Measures.lidar_beg_time, "mapping", mapping_stage_time);
+
       total_time = t_downsample + scan_match_time + solve_time +
                    map_incremental_time + undistort_time + calc_point_cov_time;
       /******* Publish functions:  *******/
@@ -1138,6 +1238,8 @@ int main(int argc, char **argv) {
   pubPath.reset();
   voxel_map_pub.reset();
   tf_broadcaster.reset();
+  if (timing_csv.is_open())
+    timing_csv.close();
   node.reset();
   if (rclcpp::ok()) {
     rclcpp::shutdown();
