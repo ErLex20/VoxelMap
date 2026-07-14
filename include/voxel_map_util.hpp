@@ -1214,21 +1214,22 @@ void pubPlaneMap(const std::unordered_map<VOXEL_LOC, OctoTree *> &feat_map,
 
 void calcBodyCov(Eigen::Vector3d &pb, const float range_inc,
                  const float degree_inc, Eigen::Matrix3d &cov) {
-  float range = sqrt(pb[0] * pb[0] + pb[1] * pb[1] + pb[2] * pb[2]);
-  float range_var = range_inc * range_inc;
+  const double range = pb.norm();
+  const double range_var = range_inc * range_inc;
+  if (!std::isfinite(range) || range < 1e-9) {
+    cov = range_var * Eigen::Matrix3d::Identity();
+    return;
+  }
+
   Eigen::Matrix2d direction_var;
   direction_var << pow(sin(DEG2RAD(degree_inc)), 2), 0, 0,
       pow(sin(DEG2RAD(degree_inc)), 2);
-  Eigen::Vector3d direction(pb);
-  direction.normalize();
+  const Eigen::Vector3d direction = pb / range;
   Eigen::Matrix3d direction_hat;
   direction_hat << 0, -direction(2), direction(1), direction(2), 0,
       -direction(0), -direction(1), direction(0), 0;
-  Eigen::Vector3d base_vector1(1, 1,
-                               -(direction(0) + direction(1)) / direction(2));
-  base_vector1.normalize();
-  Eigen::Vector3d base_vector2 = base_vector1.cross(direction);
-  base_vector2.normalize();
+  const Eigen::Vector3d base_vector1 = direction.unitOrthogonal();
+  const Eigen::Vector3d base_vector2 = base_vector1.cross(direction);
   Eigen::Matrix<double, 3, 2> N;
   N << base_vector1(0), base_vector2(0), base_vector1(1), base_vector2(1),
       base_vector1(2), base_vector2(2);

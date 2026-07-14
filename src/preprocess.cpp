@@ -35,8 +35,16 @@ void Preprocess::process(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &ms
     velodyne_handler(msg);
     break;
 
+  case OUSTER64:
+    oust64_handler(msg);
+    break;
+
   case MID360:
     mid360_handler(msg);
+    break;
+
+  case ROBOSENSE:
+    robosense_handler(msg);
     break;
 
   default:
@@ -117,7 +125,7 @@ void Preprocess::oust64_handler(const sensor_msgs::msg::PointCloud2::ConstShared
                    pl_orig.points[i].y * pl_orig.points[i].y +
                    pl_orig.points[i].z * pl_orig.points[i].z;
 
-    if (range < blind)
+    if (!std::isfinite(range) || range <= blind * blind)
       continue;
 
     Eigen::Vector3d pt_vec;
@@ -169,27 +177,34 @@ void Preprocess::velodyne_handler(
 
   pcl::PointCloud<velodyne_ros::Point> pl_orig;
   pcl::fromROSMsg(*msg, pl_orig);
-  int plsize = pl_orig.points.size();
-  // pl_surf.reserve(plsize);
-  for (int i = 0; i < pl_orig.size(); i++) {
-    PointType added_pt;
-    added_pt.x = pl_orig.points[i].x;
-    added_pt.y = pl_orig.points[i].y;
-    added_pt.z = pl_orig.points[i].z;
-    added_pt.intensity = pl_orig.points[i].intensity;
-    float angle = atan(added_pt.z / sqrt(added_pt.x * added_pt.x +
-                                         added_pt.y * added_pt.y)) *
-                  180 / M_PI;
-    int scanID = 0;
-    if (angle >= -8.83)
-      scanID = int((2 - angle) * 3.0 + 0.5);
-    else
-      scanID = N_SCANS / 2 + int((-8.83 - angle) * 2.0 + 0.5);
+  if (pl_orig.empty()) {
+    return;
+  }
 
-    // use [0 50]  > 50 remove outlies
-    if (angle > 2 || angle < -24.33 || scanID > 50 || scanID < 0) {
+  pl_surf.reserve(pl_orig.size());
+  const float first_time = pl_orig.front().time;
+  for (std::size_t i = 0; i < pl_orig.size(); ++i) {
+    if (i % point_filter_num != 0) {
       continue;
     }
+
+    const auto &source = pl_orig[i];
+    const double range_squared = source.x * source.x + source.y * source.y +
+                                 source.z * source.z;
+    if (!std::isfinite(range_squared) || range_squared <= blind * blind) {
+      continue;
+    }
+
+    PointType added_pt;
+    added_pt.x = source.x;
+    added_pt.y = source.y;
+    added_pt.z = source.z;
+    added_pt.intensity = source.intensity;
+    added_pt.normal_x = 0.0f;
+    added_pt.normal_y = 0.0f;
+    added_pt.normal_z = 0.0f;
+    // IILABS3D VLP-16 times are relative seconds and may start near -0.1.
+    added_pt.curvature = (source.time - first_time) * 1000.0f;
     pl_surf.push_back(added_pt);
   }
 }
@@ -231,6 +246,47 @@ void Preprocess::mid360_handler(
     // IILABS3D stores absolute per-point timestamps as float64 nanoseconds.
     // VoxelMap uses curvature as the offset from scan start in milliseconds.
     point.curvature = static_cast<float>((source.timestamp - first_timestamp) * 1e-6);
+    pl_surf.push_back(point);
+  }
+}
+
+void Preprocess::robosense_handler(
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg) {
+  pl_surf.clear();
+  pl_corn.clear();
+  pl_full.clear();
+
+  pcl::PointCloud<robosense_ros::Point> pl_orig;
+  pcl::fromROSMsg(*msg, pl_orig);
+  if (pl_orig.empty()) {
+    return;
+  }
+
+  pl_surf.reserve(pl_orig.size());
+  const double first_timestamp = pl_orig.front().timestamp;
+  for (std::size_t i = 0; i < pl_orig.size(); ++i) {
+    if (i % point_filter_num != 0) {
+      continue;
+    }
+
+    const auto &source = pl_orig[i];
+    const double range_squared = source.x * source.x + source.y * source.y +
+                                 source.z * source.z;
+    if (!std::isfinite(range_squared) || range_squared <= blind * blind) {
+      continue;
+    }
+
+    PointType point;
+    point.x = source.x;
+    point.y = source.y;
+    point.z = source.z;
+    point.intensity = source.intensity;
+    point.normal_x = 0.0f;
+    point.normal_y = 0.0f;
+    point.normal_z = 0.0f;
+    // RSLidar timestamps are absolute seconds; curvature stores milliseconds
+    // from the beginning of the scan for IMU de-skewing.
+    point.curvature = static_cast<float>((source.timestamp - first_timestamp) * 1000.0);
     pl_surf.push_back(point);
   }
 }

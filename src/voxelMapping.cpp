@@ -801,10 +801,6 @@ int main(int argc, char **argv) {
           V3D point_this(feats_undistort->points[i].x,
                          feats_undistort->points[i].y,
                          feats_undistort->points[i].z);
-          // if z=0, error will occur in calcBodyCov. To be solved
-          if (point_this[2] == 0) {
-            point_this[2] = 0.001;
-          }
           M3D cov;
           calcBodyCov(point_this, ranging_cov, angle_cov, cov);
 
@@ -870,9 +866,6 @@ int main(int argc, char **argv) {
         V3D point_this(feats_down_body->points[i].x,
                        feats_down_body->points[i].y,
                        feats_down_body->points[i].z);
-        if (point_this[2] == 0) {
-          point_this[2] = 0.001;
-        }
         M3D cov;
         calcBodyCov(point_this, ranging_cov, angle_cov, cov);
         M3D point_crossmat;
@@ -951,6 +944,10 @@ int main(int argc, char **argv) {
           corr_normvect->push_back(pl);
           total_residual += fabs(dis);
         }
+        if (effct_feat_num == 0) {
+          res_mean_last = 0.0;
+          break;
+        }
         res_mean_last = total_residual / effct_feat_num;
         scan_match_time +=
             std::chrono::duration_cast<std::chrono::duration<double>>(
@@ -996,20 +993,39 @@ int main(int argc, char **argv) {
           Eigen::Matrix<double, 1, 6> J_nq;
           J_nq.block<1, 3>(0, 0) = point_world - ptpl_list[i].center;
           J_nq.block<1, 3>(0, 3) = -ptpl_list[i].normal;
-          double sigma_l = J_nq * ptpl_list[i].plane_cov * J_nq.transpose();
-          R_inv(i) = 1.0 / (sigma_l + norm_vec.transpose() * cov * norm_vec);
-          double ranging_dis = point_this.norm();
+          const double sigma_l =
+              (J_nq * ptpl_list[i].plane_cov * J_nq.transpose())(0, 0);
+          const double point_cov =
+              (norm_vec.transpose() * cov * norm_vec)(0, 0);
+          const double measurement_cov = sigma_l + point_cov;
+
+          /*** calculate the Measuremnt Jacobian matrix H ***/
+          V3D A(point_crossmat * state.rot_end.transpose() * norm_vec);
+          if (!J_nq.allFinite() || !norm_vec.allFinite() || !cov.allFinite() ||
+              !A.allFinite() || !std::isfinite(sigma_l) || sigma_l < 0.0 ||
+              !std::isfinite(point_cov) || point_cov < 0.0 ||
+              !std::isfinite(measurement_cov) ||
+              measurement_cov <= 1e-12) {
+            R_inv(i) = 0.0;
+            Hsub.row(i).setZero();
+            Hsub_T_R_inv.col(i).setZero();
+            meas_vec(i) = 0.0;
+            laserCloudOri->points[i].intensity = 0.0;
+            laserCloudOri->points[i].normal_x = 0.0;
+            laserCloudOri->points[i].normal_y = 0.0;
+            laserCloudOri->points[i].normal_z = 0.0;
+            laserCloudOri->points[i].curvature = 0.0;
+            continue;
+          }
+
+          R_inv(i) = 1.0 / measurement_cov;
           laserCloudOri->points[i].intensity = sqrt(R_inv(i));
           laserCloudOri->points[i].normal_x =
               corr_normvect->points[i].intensity;
           laserCloudOri->points[i].normal_y = sqrt(sigma_l);
-          laserCloudOri->points[i].normal_z =
-              sqrt(norm_vec.transpose() * cov * norm_vec);
-          laserCloudOri->points[i].curvature =
-              sqrt(sigma_l + norm_vec.transpose() * cov * norm_vec);
+          laserCloudOri->points[i].normal_z = sqrt(point_cov);
+          laserCloudOri->points[i].curvature = sqrt(measurement_cov);
 
-          /*** calculate the Measuremnt Jacobian matrix H ***/
-          V3D A(point_crossmat * state.rot_end.transpose() * norm_vec);
           Hsub.row(i) << VEC_FROM_ARRAY(A), norm_p.x, norm_p.y, norm_p.z;
           Hsub_T_R_inv.col(i) << A[0] * R_inv(i), A[1] * R_inv(i),
               A[2] * R_inv(i), norm_p.x * R_inv(i), norm_p.y * R_inv(i),

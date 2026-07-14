@@ -9,7 +9,7 @@ using namespace std;
 typedef pcl::PointXYZINormal PointType;
 typedef pcl::PointCloud<PointType> PointCloudXYZI;
 
-enum LID_TYPE { AVIA = 1, VELO16, L515, OUSTER64, MID360 }; //{1, 2, 3, 4, 5}
+enum LID_TYPE { AVIA = 1, VELO16, L515, OUSTER64, MID360, ROBOSENSE };
 
 namespace velodyne_ros {
 struct EIGEN_ALIGN16 Point {
@@ -32,7 +32,7 @@ struct EIGEN_ALIGN16 Point {
   float intensity;
   uint32_t t;
   uint16_t reflectivity;
-  uint8_t ring;
+  uint16_t ring;
   uint16_t ambient;
   uint32_t range;
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -50,6 +50,16 @@ struct EIGEN_ALIGN16 Point {
 };
 } // namespace livox_pcl2
 
+namespace robosense_ros {
+struct EIGEN_ALIGN16 Point {
+  PCL_ADD_POINT4D;
+  float intensity;
+  uint16_t ring;
+  double timestamp;
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+};
+} // namespace robosense_ros
+
 // clang-format off
 POINT_CLOUD_REGISTER_POINT_STRUCT(ouster_ros::Point,
     (float, x, x)
@@ -59,7 +69,7 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(ouster_ros::Point,
     // use std::uint32_t to avoid conflicting with pcl::uint32_t
     (std::uint32_t, t, t)
     (std::uint16_t, reflectivity, reflectivity)
-    (std::uint8_t, ring, ring)
+    (std::uint16_t, ring, ring)
     (std::uint16_t, ambient, ambient)
     (std::uint32_t, range, range)
 )
@@ -70,6 +80,14 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(livox_pcl2::Point,
     (float, intensity, intensity)
     (std::uint8_t, tag, tag)
     (std::uint8_t, line, line)
+    (double, timestamp, timestamp)
+)
+POINT_CLOUD_REGISTER_POINT_STRUCT(robosense_ros::Point,
+    (float, x, x)
+    (float, y, y)
+    (float, z, z)
+    (float, intensity, intensity)
+    (std::uint16_t, ring, ring)
     (double, timestamp, timestamp)
 )
 
@@ -99,5 +117,6 @@ class Preprocess
   void l515_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
   void velodyne_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
   void mid360_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
+  void robosense_handler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
   
 };
